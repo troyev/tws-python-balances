@@ -60,7 +60,9 @@ class GoogleSheet():
         return row, col_num
 
     def writeCell(self, cell, value, decimals=False):
-        start_row_index, start_column_index = self.cell_to_grid_range(cell)
+        #start_row_index, start_column_index = self.cell_to_grid_range(cell)
+        start_row_index = int(cell[1:]) - 1
+        start_column_index = ord(cell[0]) - ord('A')
         if decimals:
             currency_format = {
                 "type": "NUMBER",
@@ -109,6 +111,84 @@ class GoogleSheet():
         except HttpError as err:
             print(err)
 
+    def clearCells(self, top_left_cell, bottom_right_cell):
+        # Calculate the row and column indices for the range
+        start_row = int(top_left_cell[1:]) - 1
+        start_col = ord(top_left_cell[0]) - ord('A')
+        end_row = int(bottom_right_cell[1:])
+        end_col = ord(bottom_right_cell[0]) - ord('A') + 1
+
+        # Create the batch update request to clear the cells
+        requests = [{
+            'updateCells': {
+                'range': {
+                    'sheetId': 0,  # Adjust sheet ID if necessary
+                    'startRowIndex': start_row,
+                    'startColumnIndex': start_col,
+                    'endRowIndex': end_row,
+                    'endColumnIndex': end_col
+                },
+                'rows': [{
+                    'values': [{
+                        'userEnteredValue': None
+                    }] * (end_col - start_col)
+                }] * (end_row - start_row),
+                'fields': 'userEnteredValue'
+            }
+        }]
+
+        body = {
+            'requests': requests
+        }
+
+        # Execute the batch update
+        response = self.sheet.batchUpdate(
+            spreadsheetId=self.SPREADSHEET_ID,
+            body=body
+        ).execute()
+
+    def writeGroup(self, cell, updates):
+        # Top-left cell and list of tuples to update
+
+        # Calculate the row and column indices for the top-left cell
+        start_row = int(cell[1:]) - 1
+        start_col = ord(cell[0]) - ord('A')
+
+        # Create the batch update request
+        requests = []
+        for i, row in enumerate(updates):
+            for j, value in enumerate(row):
+                cell_row = start_row + i
+                cell_col = start_col + j
+                value_type = 'stringValue' if isinstance(value, str) else 'numberValue'
+                requests.append({
+                    'updateCells': {
+                        'range': {
+                            'sheetId': 0,  # Adjust sheet ID if necessary
+                            'startRowIndex': cell_row,
+                            'startColumnIndex': cell_col,
+                            'endRowIndex': cell_row + 1,
+                            'endColumnIndex': cell_col + 1
+                        },
+                        'rows': [{
+                            'values': [{
+                                'userEnteredValue': {value_type: value}
+                            }]
+                        }],
+                        'fields': 'userEnteredValue'
+                    }
+                })
+
+        body = {
+            'requests': requests
+        }
+
+        # Execute the batch update
+        response = self.sheet.batchUpdate(
+            spreadsheetId=self.SPREADSHEET_ID,
+            body=body
+        ).execute()
+
                         
 def SetupLogger():
     if not os.path.exists("log"):
@@ -153,6 +233,33 @@ class TestWrapper(wrapper.EWrapper):
         self.SPY.currency = "USD"
         self.SPY.exchange = "SMART"
         self.client.reqMktData(1001, self.SPY, "", False, False, [])
+        self.positions = []
+        self.positionsBySymbol = {}
+        self.client.reqPositions()
+
+    @iswrapper
+    def position(self, account: str, contract: Contract, position: Decimal,
+                 avgCost: float):
+        super().position(account, contract, position, avgCost)
+        self.positions.append((account, contract.symbol, position, avgCost))
+        if contract.symbol not in self.positionsBySymbol:
+            self.positionsBySymbol[contract.symbol] = [contract.symbol, 0, 0.0]
+        oldPositon = self.positionsBySymbol[contract.symbol][1]
+        oldTotal = oldPositon * self.positionsBySymbol[contract.symbol][2] 
+        newTotal = position * avgCost
+        newPosition = oldPositon + position
+        self.positionsBySymbol[contract.symbol][1] = newPosition
+        self.positionsBySymbol[contract.symbol][2] = (oldTotal + newTotal) /  newPosition
+        print("Position.", "Account:", account, "Symbol:", contract.symbol, "SecType:",
+              contract.secType, "Currency:", contract.currency,
+              "Position:", position, "Avg cost:", avgCost)
+
+    @iswrapper
+    def positionEnd(self):
+        super().positionEnd()
+        self.sheet.writeGroup('A14', sorted(self.positions))
+        self.sheet.writeGroup('A32', sorted(self.positionsBySymbol.values()))
+        print("PositionEnd")
 
     @iswrapper
     def tickPrice(self, reqId, tickType: TickType, price: float,
@@ -194,10 +301,9 @@ class TestClient(EClient):
 if __name__ == "__main__":
     g = GoogleSheet()
     g.writeCell(cell="D1", value=0)
-    g.writeCell(cell="B5", value=0)
-    g.writeCell(cell="B6", value=0)
-    g.writeCell(cell="B7", value=0)
-    g.writeCell(cell="B8", value=0)
+    g.clearCells(top_left_cell="B5", bottom_right_cell="B8")
+    g.clearCells(top_left_cell="A14", bottom_right_cell="D30")
+    g.clearCells(top_left_cell="A32", bottom_right_cell="C51")
     SetupLogger()
     try:
         wrapper = TestWrapper(sheet=g)
