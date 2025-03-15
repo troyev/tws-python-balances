@@ -266,7 +266,7 @@ class TestWrapper(wrapper.EWrapper):
                   attrib):
         super().tickPrice(reqId, tickType, price, attrib)
         now = datetime.datetime.now()
-        if tickType == TickTypeEnum.ASK:
+        if tickType == TickTypeEnum.LAST:
             if (now - self.lastUpdate) >= datetime.timedelta(seconds=5):
                 self.lastUpdate = now
                 self.sheet.writeCell("D1", price, decimals=True)
