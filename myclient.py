@@ -14,6 +14,7 @@ from decimal import Decimal
 from ibapi.ticktype import * # @UnusedWildImport
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -34,7 +35,13 @@ class GoogleSheet():
         # If there are no (valid) credentials available, let the user log in.
         if not self.creds or not self.creds.valid:
             if self.creds and self.creds.expired and self.creds.refresh_token:
-                self.creds.refresh(Request())
+                try:
+                    self.creds.refresh(Request())
+                except RefreshError:
+                    flow = InstalledAppFlow.from_client_secrets_file(
+                        "credentials.json", self.SCOPES
+                    )
+                    self.creds = flow.run_local_server(port=0)
             else:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     "credentials.json", self.SCOPES
@@ -225,13 +232,14 @@ class TestWrapper(wrapper.EWrapper):
     def nextValidId(self, orderId: int):
         super().nextValidId(orderId)
         logger.info("NextValidId:"+ str(orderId))
+        self.client.reqMarketDataType(4)
         self.client.reqAccountSummary(9001, "All", AccountSummaryTags.AllTags)
 
         self.SPY = Contract()
         self.SPY.symbol = "SPY"
         self.SPY.secType = "STK"
         self.SPY.currency = "USD"
-        self.SPY.exchange = "SMART"
+        self.SPY.exchange = "ARCA"
         self.client.reqMktData(1001, self.SPY, "", False, False, [])
         self.positions = []
         self.positionsBySymbol = {}
@@ -266,7 +274,7 @@ class TestWrapper(wrapper.EWrapper):
                   attrib):
         super().tickPrice(reqId, tickType, price, attrib)
         now = datetime.datetime.now()
-        if tickType == TickTypeEnum.LAST:
+        if tickType == TickTypeEnum.LAST or tickType == 68:
             if (now - self.lastUpdate) >= datetime.timedelta(seconds=5):
                 self.lastUpdate = now
                 self.sheet.writeCell("D1", price, decimals=True)
